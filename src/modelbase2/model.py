@@ -10,12 +10,16 @@ from __future__ import annotations
 import copy
 import inspect
 import itertools as it
-import math
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast
 
+import latexify
+import latexify.exceptions
 import numpy as np
 import pandas as pd
+import regex as re
 
 from modelbase2 import fns
 from modelbase2.types import (
@@ -1619,3 +1623,376 @@ class Model:
                 n = dv.fn(*(args[i] for i in dv.args))
                 dxdt[k] += n * fluxes[flux]
         return dxdt
+
+    ##########################################################################
+    # Get latex
+    ##########################################################################
+
+    def latex_func(
+            self,
+            func: Callable,
+            func_args: Iterable,
+            math_expr: dict | None = None,
+            *,
+            reduce_assignment: bool = True
+    ) -> str:
+        """Helper function to 'latexify' model function given.
+
+        Args:
+            func (Callable): Function to 'latexify'.
+            func_args (Iterable): Math arguments to replace arguments of given function.
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to None.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str: Function with replaced values if applicable. Only the right hand side of the function!
+
+        """
+        if math_expr is None:
+            math_expr = {}
+        try:
+            ltx = latexify.get_latex(func, reduce_assignments=reduce_assignment)
+            if ltx.count(r"\\") > 0:
+                for i in [r"\begin{array}{l} ", r" \end{array}"]:
+                    ltx = ltx.replace(i, "")
+                line_split = ltx.split(r"\\")
+            else:
+                line_split = [ltx]
+
+            final = line_split[-1]
+
+            for i in line_split[:-1]:
+                lhs = i.split(" = ")[0].replace(" ", "")
+                rhs = i.split(" = ")[1]
+                final = final.replace(lhs, rhs)
+
+            for old, new in zip(
+                (
+                    r"\mathopen{}",
+                    r"\mathclose{}",
+                ),
+                ("", ""),
+                strict=False,
+            ):
+                final = final.replace(old, new)
+            lhs = final.split("=")[0]
+            rhs = final.split(" = ")[1]
+            func_a_list = lhs[lhs.find("(") + 1 : -2].split(", ")
+
+            for arg_model, arg_ltx in zip(func_args, func_a_list, strict=False):
+                if math_expr.get(arg_model) is not None: # Use supplied math expressions
+                    arg_model = math_expr[arg_model]  # noqa: PLW2901
+                # Escape literal characters
+                arg_model = arg_model.replace("\\", r"\\") # Cant use re.escape() because some latex characters should not be escaped  # noqa: PLW2901
+                arg_ltx = re.escape(arg_ltx)  # noqa: PLW2901
+                rhs = re.sub(rf"{arg_ltx}(?=( |$|}}))", arg_model, rhs)
+                # rhs = rhs.replace(to_replace, f" {arg_model} ")
+        except latexify.exceptions.LatexifyError:
+            rhs = f'ERROR because of function "{func.__name__}"'
+
+        return rhs
+
+    def export_as_txt(
+            self,
+            inp: str,
+            txt_path: Path
+    ) -> None:
+        """Helper function to export changes made to information as a text-file.
+
+        Args:
+            inp (str): Input to be compared if changed and inserted into file
+            txt_path (Path): Path to txt-file.
+
+        """
+        if not Path.is_file(txt_path):
+            with Path.open(txt_path, "w") as f:
+                f.write(f"------- Start on {datetime.now()} -------\n\n")  # noqa: DTZ005
+                f.write(inp)
+                print(f'Created "{txt_path.name}"!')  # noqa: T201
+                return
+        else:
+            with Path.open(txt_path) as f_tmp:
+                read = f_tmp.read()
+            flag_idxs = [m.start() for m in re.finditer("-------", read)]
+
+            try:
+                compare_block = read[flag_idxs[1] + 9 : flag_idxs[2]]
+            except:  # noqa: E722
+                compare_block = read[flag_idxs[1] + 9 :]
+
+            if compare_block == inp:
+                print(f'"{txt_path.name}" still up to date!')  # noqa: T201
+                return
+            with Path.open(txt_path, "r+") as f:
+                f.seek(0, 0)
+                f.write(f"------- Update on {datetime.now()} -------\n\n" + inp + read)  # noqa: DTZ005
+                print(f'Updated "{txt_path.name}"')  # noqa: T201
+            return
+
+    def get_latex_single(
+            self,
+            name: str,
+            math_expr: dict | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True
+    ) -> str:
+        """Extract the LaTeX information of the given variable, reaction, or derived.
+
+        Args:
+            name (str): Name of variable, reaction, or derived. Has to be in model!
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str: _description_
+
+        """
+        if math_expr is None:
+            math_expr = {}
+        if self._ids[name] == "derived":
+            var = self._derived[name]
+
+            lhs = math_expr[name] if math_expr.get(name) is not None else name
+            rhs = self.latex_func(
+                func=var.fn,
+                func_args=var.args,
+                math_expr=math_expr
+            )
+        elif self._ids[name] == "reaction":
+            var = self._reactions[name] # type: ignore
+
+            lhs = math_expr[name] if math_expr.get(name) is not None else name
+            rhs = self.latex_func(
+                func=var.fn,
+                func_args=var.args,
+                math_expr=math_expr
+            )
+        elif self._ids[name] == "variable":
+            comp = math_expr[name] if math_expr.get(name) is not None else name
+
+            lhs = rf"\frac{{\mathrm{{d}}{comp}}}{{\mathrm{{d}}t}}"
+            stoics = self.get_stoichiometries().T[name]
+            clean_stoics = stoics[stoics != 0.0]
+
+            rhs = ""
+
+            for rate in clean_stoics.index:
+                stoic = self._reactions[rate].stoichiometry[name]
+                # print(stoic)
+                bridge = r" \cdot "
+                if isinstance(stoic, Derived):
+                    stoic = self.latex_func(stoic.fn, stoic.args, math_expr, reduce_assignment=reduce_assignment) # type: ignore
+                elif abs(stoic) == 1:
+                    stoic = str(stoic).replace("1", "") # type: ignore
+                    bridge = "" if rhs == "" else " "
+                else:
+                    stoic = str(stoic) # type: ignore
+
+                if rhs != "" and (stoic == "" or stoic[0] != "-"): # type: ignore
+                    stoic = f"+{stoic}" # type: ignore
+
+                rhs += rf"{stoic}{bridge}{rate} "
+
+            rhs = rhs[:-1]
+        else:
+            print(f'"{name}" is not a reaction or derived. It is a "{self._ids[name]}"')  # noqa: T201
+
+        if align:
+            return f"{lhs} &= {rhs}" # type: ignore
+        else:
+            return f"{lhs} = {rhs}" # type: ignore
+
+
+
+    def get_latex_reactions(
+            self,
+            math_expr: dict | None = None,
+            txt_path: Path | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True
+    ) -> str | None:
+        """Extract the LaTeX information of all reactions of the model as a txt-file or a str.
+
+        Args:
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            txt_path (Path | None, optional): Path to txt-file.. Defaults to None.
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str | None: Depending if txt_path is given, export LaTeX information of all reactions of the model to a txt-file or a str
+
+        """
+        res = ""
+
+        for reac in self._reactions:
+            res += self.get_latex_single(reac, math_expr, align=align, reduce_assignment=reduce_assignment)
+            res += r" \\"
+            res += " \n"
+
+        res = res[:-2]
+
+        if txt_path is None:
+            return res
+        txt_path = txt_path.with_suffix(".txt")
+        self.export_as_txt(res, txt_path)
+        return None
+
+
+    def get_latex_odes(
+            self,
+            math_expr: dict | None = None,
+            txt_path: Path | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True
+    ) -> str | None:
+        """Extract the LaTeX information of the ODE system of the model as a txt-file or a str.
+
+        Args:
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            txt_path (Path | None, optional): Path to txt-file.. Defaults to None.
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str | None: Depending if txt_path is given, export LaTeX information of the ODE system of the model to a txt-file or a str
+
+        """
+        res = ""
+
+        for variable in self._variables:
+            res += self.get_latex_single(variable, math_expr, align=align,reduce_assignment=reduce_assignment)
+            res += r" \\"
+            res += " \n"
+
+        res = res[:-2]
+
+        if txt_path is None:
+            return res
+        txt_path = txt_path.with_suffix(".txt")
+        self.export_as_txt(res, txt_path)
+        return None
+
+    def get_latex_derived(
+            self,
+            math_expr: dict | None = None,
+            txt_path: Path | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True
+    ) -> str | None:
+        """Extract the LaTeX information of all derived of the model as a txt-file or a str.
+
+        Args:
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            txt_path (Path | None, optional): Path to txt-file.. Defaults to None.
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str | None: Depending if txt_path is given, export LaTeX information of all derived of the model to a txt-file or a str
+
+        """
+        res = ""
+
+        for derived in self._derived:
+            res += self.get_latex_single(derived, math_expr, align=align, reduce_assignment=reduce_assignment)
+            res += r" \\"
+            res += " \n"
+
+        res = res[:-2]
+
+        if txt_path is None:
+            return res
+        txt_path = txt_path.with_suffix(".txt")
+        self.export_as_txt(res, txt_path)
+        return None
+
+    def get_latex_custom(
+            self,
+            names: list[str],
+            math_expr: dict | None = None,
+            txt_path: Path | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True
+    ) -> str | None:
+        """Extract the LaTeX information of a custom list of information from the model as a txt-file or a str.
+
+        Args:
+            names (list[str]): List of infromation to be extracted from the model.
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            txt_path (Path | None, optional): Path to txt-file.. Defaults to None.
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+
+        Returns:
+            str | None: Depending if txt_path is given, export LaTeX information of a custom list of information from the model to a txt-file or a str
+
+        """
+        res = ""
+
+        for var in names:
+            res += self.get_latex_single(var, math_expr, align=align, reduce_assignment=reduce_assignment)
+            res += r" \\"
+            res += " \n"
+
+        res = res[:-2]
+
+        if txt_path is None:
+            return res
+        txt_path = txt_path.with_suffix(".txt")
+        self.export_as_txt(res, txt_path)
+        return None
+
+    def get_latex_all(
+            self,
+            math_expr: dict | None = None,
+            txt_path: Path | None = None,
+            *,
+            align: bool = True,
+            reduce_assignment: bool = True,
+            combine: bool = False
+    ) -> str | None | tuple[str | None, str | None, str | None]:
+        """Extract the LaTeX information of all reactions, ODEs, and derived from the model as a txt-file or a str.
+
+        Args:
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            txt_path (Path | None, optional): Path to txt-file.. Defaults to None.
+            align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
+            reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
+            combine (bool, optional): Boolean value if the exported infromation should be combined inside one txt-file. Defaults to False.
+
+        Returns:
+            str | None: Depending if txt_path is given, export LaTeX information of all reactions, ODEs, and derived from the model to a txt-file or a str
+
+        """
+        odes = self.get_latex_odes(math_expr, align=align, reduce_assignment=reduce_assignment)
+        reacs = self.get_latex_reactions(math_expr, align=align, reduce_assignment=reduce_assignment)
+        derived = self.get_latex_derived(math_expr, align=align, reduce_assignment=reduce_assignment)
+        if txt_path is None:
+            if combine:
+                return f"{odes}\n\n{reacs}\n\n{derived}"
+            return odes, reacs, derived
+        if combine:
+            inp = "ODE System:\n"
+            inp += odes # type: ignore
+            inp += "\n\n"
+            inp += "Reactions:\n"
+            inp += reacs # type: ignore
+            inp += "\n\n"
+            inp += "Derived:\n"
+            inp += derived # type: ignore
+
+            txt_path = txt_path.with_suffix(".txt")
+            self.export_as_txt(inp, txt_path)
+            return None
+        self.get_latex_odes(math_expr, txt_path.with_stem(txt_path.stem + "_ODEs"), align=align, reduce_assignment=reduce_assignment)
+        self.get_latex_reactions(math_expr, txt_path.with_stem(txt_path.stem + "_reactions"), align=align, reduce_assignment=reduce_assignment)
+        self.get_latex_derived(math_expr, txt_path.with_stem(txt_path.stem + "_derived"), align=align, reduce_assignment=reduce_assignment)
+        return None
+

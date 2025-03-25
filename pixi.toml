@@ -13,6 +13,8 @@ platforms = ["linux-64", "win-64", "osx-arm64"]
 
 [pypi-dependencies]
 modelbase2 = {path = ".", extras = ['dev'], editable = true}
+latexify-py = ">=0.4.4, <0.5"
+lazydocs = ">=0.4.8, <0.5"
 
 [target.linux-64.dependencies]
 blast = {channel = "bioconda", version = ">=2.15.0"}
