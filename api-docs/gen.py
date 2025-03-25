@@ -1,7 +1,9 @@
+from pathlib import Path
+
 from lazydocs import MarkdownGenerator
 from lazydocs.generation import to_md_file
+
 from modelbase2 import Model
-from pathlib import Path
 
 generator = MarkdownGenerator()
 
@@ -34,6 +36,6 @@ for i in [
 
 to_md_file(
     docs,
-    str(Path(__file__).parent / 'test.md'),
+    str(Path(__file__).parents[1] / 'docs/latexify.md'),
     watermark=False
 )
