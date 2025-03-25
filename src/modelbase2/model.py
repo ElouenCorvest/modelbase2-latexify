@@ -225,6 +225,7 @@ class Model:
     _derived: dict[str, Derived] = field(default_factory=dict)
     _readouts: dict[str, Readout] = field(default_factory=dict)
     _reactions: dict[str, Reaction] = field(default_factory=dict)
+    _math_exprs: dict[str, str] = field(default_factory=dict)
     _surrogates: dict[str, AbstractSurrogate] = field(default_factory=dict)
     _cache: ModelCache | None = None
 
@@ -827,6 +828,7 @@ class Model:
         fn: RateFn,
         *,
         args: list[str],
+        math: str | None = None,
     ) -> Self:
         """Adds a derived attribute to the model.
 
@@ -837,13 +839,14 @@ class Model:
             name: The name of the derived attribute.
             fn: The function used to compute the derived attribute.
             args: The list of arguments to be passed to the function.
+            math: A str in LaTeX formatting that should be appointed to this Derived.
 
         Returns:
             Self: The instance of the model with the added derived attribute.
 
         """
         self._insert_id(name=name, ctx="derived")
-        self._derived[name] = Derived(fn, args)
+        self._derived[name] = Derived(fn, args, math)
         return self
 
     def get_derived_parameter_names(self) -> list[str]:
@@ -879,6 +882,7 @@ class Model:
         fn: RateFn | None = None,
         *,
         args: list[str] | None = None,
+        math: str | None = None,
     ) -> Self:
         """Updates the derived function and its arguments for a given name.
 
@@ -889,6 +893,7 @@ class Model:
             name: The name of the derived function to update.
             fn: The new derived function. If None, the existing function is retained. Defaults to None.
             args: The new arguments for the derived function. If None, the existing arguments are retained. Defaults to None.
+            math: A str in LaTeX formatting that should be appointed to this Derived.
 
         Returns:
             Self: The instance of the class with the updated derived function and arguments.
@@ -897,6 +902,7 @@ class Model:
         der = self._derived[name]
         der.fn = der.fn if fn is None else fn
         der.args = der.args if args is None else args
+        der.math = der.math if math is None else math
         return self
 
     @_invalidate_cache
@@ -970,6 +976,7 @@ class Model:
         *,
         args: list[str],
         stoichiometry: Mapping[str, float | str | Derived],
+        math: str | None = None,
     ) -> Self:
         """Adds a reaction to the model.
 
@@ -985,6 +992,7 @@ class Model:
             fn: The function representing the reaction.
             args: A list of arguments for the reaction function.
             stoichiometry: The stoichiometry of the reaction, mapping species to their coefficients.
+            math: A str in LaTeX formatting that should be appointed to this reaction
 
         Returns:
             Self: The instance of the model with the added reaction.
@@ -996,7 +1004,7 @@ class Model:
             k: Derived(fns.constant, [v]) if isinstance(v, str) else v
             for k, v in stoichiometry.items()
         }
-        self._reactions[name] = Reaction(fn=fn, stoichiometry=stoich, args=args)
+        self._reactions[name] = Reaction(fn=fn, stoichiometry=stoich, args=args, math=math)
         return self
 
     def get_reaction_names(self) -> list[str]:
@@ -1017,6 +1025,7 @@ class Model:
         self,
         name: str,
         fn: RateFn | None = None,
+        math: str | None = None,
         *,
         args: list[str] | None = None,
         stoichiometry: Mapping[str, float | Derived | str] | None = None,
@@ -1042,6 +1051,7 @@ class Model:
         """
         rxn = self._reactions[name]
         rxn.fn = rxn.fn if fn is None else fn
+        rxn.math = rxn.math if math is None else math
 
         if stoichiometry is not None:
             stoich = {
@@ -1628,6 +1638,64 @@ class Model:
     # Get latex
     ##########################################################################
 
+    @property
+    def math_exprs(self) -> dict[str, str]:
+        """Returns a copy of the _math_exprs dictionary.
+
+        The _math_exprs dictionary contains key-value pairs where both keys and values are strings.
+
+        Returns:
+            dict[str, str]: A copy of the _math_exprs dictionary.
+
+        """
+        return self._math_exprs.copy()
+
+    def insert_math_expr(self, *, name: str, math: str) -> None:
+        """Inserts a math expression into the model's internal dictionary.
+
+        Args:
+            name: The name of the identifier to add a math expression.
+            math: The math expression associated to the identifier.
+
+        Raises:
+            NameError: If the name does not exist in the model's ID dictionary.
+
+        """
+        if name not in self._ids:
+            msg = f"Model does not contain {name}"
+            raise NameError(msg)
+
+        self._math_exprs[name] = math
+
+    def insert_math_exprs(self, math_exprs: dict[str, str]) -> None:
+        """Inserts several math expressions into the model's internal dictionary.
+
+        Args:
+            math_exprs: A dictionary of a name and math expression pair
+
+        Raises:
+            NameError: If the name does not exist in the model's ID dictionary.
+
+        """
+        for name, math_expr in math_exprs.items():
+            self.insert_math_expr(name=name, math=math_expr)
+
+    def remove_math_expr(self, *, name: str) -> None:
+        """Remove a math expression from the internal dictionary.
+
+        Args:
+            name (str): The name of the ID to be removed.
+
+        Raises:
+            KeyError: If the specified name does not exist in the dictionary.
+
+        """
+        del self._math_exprs[name]
+
+    ##########################################################################
+    # Get latex
+    ##########################################################################
+
     def latex_func(
             self,
             func: Callable,
@@ -1682,6 +1750,11 @@ class Model:
             for arg_model, arg_ltx in zip(func_args, func_a_list, strict=False):
                 if math_expr.get(arg_model) is not None: # Use supplied math expressions
                     arg_model = math_expr[arg_model]  # noqa: PLW2901
+                elif arg_model in self._ids:
+                    if self._ids[arg_model] == "reaction" and self._reactions[arg_model].math is not None:
+                        arg_model = self._reactions[arg_model].math
+                    if self._ids[arg_model] == "derived" and self._derived[arg_model].math is not None:
+                        arg_model = self._derived[arg_model].math
                 # Escape literal characters
                 arg_model = arg_model.replace("\\", r"\\") # Cant use re.escape() because some latex characters should not be escaped  # noqa: PLW2901
                 arg_ltx = re.escape(arg_ltx)  # noqa: PLW2901
@@ -1741,7 +1814,7 @@ class Model:
 
         Args:
             name (str): Name of variable, reaction, or derived. Has to be in model!
-            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var should not be used. Defaults to dict().
+            math_expr (dict | None, optional): Dictionary of names in model (keys) and attributed LaTeX conversion (values) if the given python var and the stored math expression should not be used. Defaults to dict().
             align (bool, optional): Boolean value if the information should be exported with '&=' or '='. Defaults to True.
             reduce_assignment (bool, optional): Boolean value if the assingments inside the function should be reduced. Check latexify_py docs for more info. Defaults to True.
 
@@ -1751,10 +1824,17 @@ class Model:
         """
         if math_expr is None:
             math_expr = {}
+        math_expr = self._math_exprs | math_expr
         if self._ids[name] == "derived":
             var = self._derived[name]
 
-            lhs = math_expr[name] if math_expr.get(name) is not None else name
+            if math_expr.get(name) is not None:
+                lhs = math_expr[name]
+            elif var.math is not None:
+                lhs = var.math
+            else:
+                lhs = name
+
             rhs = self.latex_func(
                 func=var.fn,
                 func_args=var.args,
@@ -1763,7 +1843,13 @@ class Model:
         elif self._ids[name] == "reaction":
             var = self._reactions[name] # type: ignore
 
-            lhs = math_expr[name] if math_expr.get(name) is not None else name
+            if math_expr.get(name) is not None:
+                lhs = math_expr[name]
+            elif var.math is not None:
+                lhs = var.math
+            else:
+                lhs = name
+
             rhs = self.latex_func(
                 func=var.fn,
                 func_args=var.args,
@@ -1780,7 +1866,7 @@ class Model:
 
             for rate in clean_stoics.index:
                 stoic = self._reactions[rate].stoichiometry[name]
-                # print(stoic)
+                rate = self._reactions[rate].math if self._reactions[rate].math is not None else rate
                 bridge = r" \cdot "
                 if isinstance(stoic, Derived):
                     stoic = self.latex_func(stoic.fn, stoic.args, math_expr, reduce_assignment=reduce_assignment) # type: ignore

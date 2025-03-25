@@ -2,13 +2,13 @@
 
 ## modelbase2-latexify
 
-This fork adds several new methods to the Model class. These methods enables the "automatic" conversion of the model infromation into a LaTeX format. The ODE system, the reactions, and the derived components of the model can easily be extracted into a string, or a seperate txt-file to further transfer to a LaTeX generator. With this addition, I hope to fascilitate the publishing and sharing of each model created by modelbase, as a pseudo-bridge is created between the actual model code and the text summary of it. With adding these methods into your pipeline, you should in theory make the conversion from Python to LaTeX much quicker and eliminate many "copying" issues that may come by doing it manually.
+This fork adds several new methods to the `Model` class. These `methods` enables the "automatic" conversion of the model infromation into a LaTeX format. The ODE system, the reactions, and the derived components of the model can easily be extracted into a string, or a seperate txt-file to further transfer to a LaTeX generator. With this addition, I hope to fascilitate the publishing and sharing of each model created by modelbase, as a pseudo-bridge is created between the actual model code and the text summary of it. With adding these methods into your pipeline, you should in theory make the conversion from Python to LaTeX much quicker and eliminate many "copying" issues that may come by doing it manually.
 
 ### Summary
 
 The entie docs of each added new method is to be found in the file [`latexify.md`](/docs/latexify.md). This doc file has been created using the package [`lazydocs`](https://github.com/ml-tooling/lazydocs) and the corresponding running script can be found [here](api-docs/gen.py).
 
-Additionally an example file has been created to showcase the methods in action, and provide proof to the potential of this new package. These examples can be found in [`latexify.ipynb`](docs/latexify.ipynb)
+Additionally an example file has been created to showcase the methods in action, and provide proof to the potential of these new features. These examples can be found in [`latexify.ipynb`](docs/latexify.ipynb).
 
 ## Installation
 
